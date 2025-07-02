@@ -1,0 +1,604 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Meraki Webhook Alert Processor with Lambda, API Gateway, and required IAM roles'
+
+Parameters:
+  GoogleChatWebhookUrl:
+    Type: String
+    Description: Google Chat webhook URL for notifications
+    Default: ''
+    NoEcho: true
+  
+  SenderEmail:
+    Type: String
+    Description: SES verified sender email address
+    Default: ''
+  
+  RecipientEmails:
+    Type: String
+    Description: Comma-separated list of recipient email addresses
+    Default: ''
+  
+  LambdaFunctionName:
+    Type: String
+    Description: Name for the Lambda function
+    Default: 'meraki-webhook-processor'
+  
+  ApiGatewayName:
+    Type: String
+    Description: Name for the API Gateway
+    Default: 'meraki-webhook-api'
+  
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: 'dev'
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+  BedrockModelId:
+    Type: String
+    Description: Bedrock model ID to use (leave empty for auto-selection based on region)
+    Default: ''
+
+  EnableApiKey:
+    Type: String
+    Description: Enable API key authentication for the webhook endpoint
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Mappings:
+  # Regional model availability mapping - Updated with Claude 4 priority
+  BedrockModels:
+    us-east-1:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+    us-west-2:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+    eu-west-1:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+    eu-central-1:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+    ap-southeast-1:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+    ap-southeast-2:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+    ap-northeast-1:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+    ap-south-1:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+    ca-central-1:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-sonnet-20240229-v1:0'
+      Fallback: 'anthropic.claude-3-haiku-20240307-v1:0'
+    # Default fallback for any other region
+    default:
+      Primary: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      Secondary: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Fallback: 'anthropic.claude-3-sonnet-20240229-v1:0'
+
+  # Cross-region inference profile ARNs for models that require them
+  # Most Claude models now require inference profiles in most regions
+  InferenceProfiles:
+    us-east-1:
+      Claude4Sonnet: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-haiku-20240307-v1:0'
+    us-west-2:
+      Claude4Sonnet: 'arn:aws:bedrock:us-west-2::inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:us-west-2::inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:us-west-2::inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:us-west-2::inference-profile/us.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:us-west-2::inference-profile/us.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:us-west-2::inference-profile/us.anthropic.claude-3-haiku-20240307-v1:0'
+    eu-west-1:
+      Claude4Sonnet: 'arn:aws:bedrock:eu-west-1::inference-profile/eu.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:eu-west-1::inference-profile/eu.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:eu-west-1::inference-profile/eu.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:eu-west-1::inference-profile/eu.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:eu-west-1::inference-profile/eu.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:eu-west-1::inference-profile/eu.anthropic.claude-3-haiku-20240307-v1:0'
+    eu-central-1:
+      Claude4Sonnet: 'arn:aws:bedrock:eu-central-1::inference-profile/eu.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:eu-central-1::inference-profile/eu.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:eu-central-1::inference-profile/eu.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:eu-central-1::inference-profile/eu.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:eu-central-1::inference-profile/eu.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:eu-central-1::inference-profile/eu.anthropic.claude-3-haiku-20240307-v1:0'
+    ap-southeast-1:
+      Claude4Sonnet: 'arn:aws:bedrock:ap-southeast-1::inference-profile/apac.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:ap-southeast-1::inference-profile/apac.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:ap-southeast-1::inference-profile/apac.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:ap-southeast-1::inference-profile/apac.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:ap-southeast-1::inference-profile/apac.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:ap-southeast-1::inference-profile/apac.anthropic.claude-3-haiku-20240307-v1:0'
+    ap-southeast-2:
+      Claude4Sonnet: 'arn:aws:bedrock:ap-southeast-2::inference-profile/apac.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:ap-southeast-2::inference-profile/apac.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:ap-southeast-2::inference-profile/apac.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:ap-southeast-2::inference-profile/apac.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:ap-southeast-2::inference-profile/apac.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:ap-southeast-2::inference-profile/apac.anthropic.claude-3-haiku-20240307-v1:0'
+    ap-northeast-1:
+      Claude4Sonnet: 'arn:aws:bedrock:ap-northeast-1::inference-profile/apac.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:ap-northeast-1::inference-profile/apac.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:ap-northeast-1::inference-profile/apac.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:ap-northeast-1::inference-profile/apac.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:ap-northeast-1::inference-profile/apac.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:ap-northeast-1::inference-profile/apac.anthropic.claude-3-haiku-20240307-v1:0'
+    ap-south-1:
+      Claude4Sonnet: 'arn:aws:bedrock:ap-south-1::inference-profile/apac.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:ap-south-1::inference-profile/apac.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:ap-south-1::inference-profile/apac.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:ap-south-1::inference-profile/apac.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:ap-south-1::inference-profile/apac.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:ap-south-1::inference-profile/apac.anthropic.claude-3-haiku-20240307-v1:0'
+    ca-central-1:
+      Claude4Sonnet: 'arn:aws:bedrock:ca-central-1::inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:ca-central-1::inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:ca-central-1::inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:ca-central-1::inference-profile/us.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:ca-central-1::inference-profile/us.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:ca-central-1::inference-profile/us.anthropic.claude-3-haiku-20240307-v1:0'
+    # Default fallback for any other region (use US profiles)
+    default:
+      Claude4Sonnet: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0'
+      Claude37Sonnet: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+      Claude35SonnetV2: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      Claude35Sonnet: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-5-sonnet-20240620-v1:0'
+      Claude3Sonnet: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-sonnet-20240229-v1:0'
+      Claude3Haiku: 'arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-3-haiku-20240307-v1:0'
+
+Conditions:
+  UseCustomModelId: !Not [!Equals [!Ref BedrockModelId, '']]
+  UseRegionalModel: !Equals [!Ref BedrockModelId, '']
+  EnableApiKeyAuth: !Equals [!Ref EnableApiKey, 'true']
+
+Resources:
+  # IAM Role for Lambda Function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${LambdaFunctionName}-execution-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: 
+                  # Grant access to all Claude models in the region for fallback capability
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude*'
+                  # Grant access to inference profiles for Claude 4 models
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::inference-profile/*'
+                  # Also grant specific access to mapped models
+                  - !If 
+                    - UseCustomModelId
+                    - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}'
+                    - !Sub 
+                      - 'arn:aws:bedrock:${AWS::Region}::foundation-model/${ModelId}'
+                      - ModelId: !FindInMap [BedrockModels, !Ref 'AWS::Region', Primary]
+                  - !If 
+                    - UseCustomModelId
+                    - !Ref 'AWS::NoValue'
+                    - !Sub 
+                      - 'arn:aws:bedrock:${AWS::Region}::foundation-model/${ModelId}'
+                      - ModelId: !FindInMap [BedrockModels, !Ref 'AWS::Region', Secondary]
+                  - !If 
+                    - UseCustomModelId
+                    - !Ref 'AWS::NoValue'
+                    - !Sub 
+                      - 'arn:aws:bedrock:${AWS::Region}::foundation-model/${ModelId}'
+                      - ModelId: !FindInMap [BedrockModels, !Ref 'AWS::Region', Fallback]
+        - PolicyName: SESAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${LambdaFunctionName}-${Environment}:*'
+
+  # Lambda Function
+  MerakiWebhookLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${LambdaFunctionName}-${Environment}'
+      Runtime: python3.11
+      Handler: lambda.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder code - will be replaced during deployment
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Function needs to be updated with actual code')
+              }
+      Environment:
+        Variables:
+          GOOGLE_CHAT_WEBHOOK_URL: !Ref GoogleChatWebhookUrl
+          SES_SENDER_EMAIL: !Ref SenderEmail
+          SES_RECIPIENT_EMAILS: !Ref RecipientEmails
+          ENVIRONMENT: !Ref Environment
+          BEDROCK_MODEL_ID: !If 
+            - UseCustomModelId
+            - !Ref BedrockModelId
+            - !FindInMap [BedrockModels, !Ref 'AWS::Region', Primary]
+          BEDROCK_CLAUDE4_SONNET_PROFILE_ARN: !FindInMap [InferenceProfiles, !Ref 'AWS::Region', Claude4Sonnet]
+          BEDROCK_CLAUDE37_SONNET_PROFILE_ARN: !FindInMap [InferenceProfiles, !Ref 'AWS::Region', Claude37Sonnet]
+          BEDROCK_CLAUDE35_SONNET_V2_PROFILE_ARN: !FindInMap [InferenceProfiles, !Ref 'AWS::Region', Claude35SonnetV2]
+          BEDROCK_CLAUDE35_SONNET_PROFILE_ARN: !FindInMap [InferenceProfiles, !Ref 'AWS::Region', Claude35Sonnet]
+          BEDROCK_CLAUDE3_SONNET_PROFILE_ARN: !FindInMap [InferenceProfiles, !Ref 'AWS::Region', Claude3Sonnet]
+          BEDROCK_CLAUDE3_HAIKU_PROFILE_ARN: !FindInMap [InferenceProfiles, !Ref 'AWS::Region', Claude3Haiku]
+      Timeout: 300
+      MemorySize: 512
+      Description: 'Processes Meraki webhook alerts and sends notifications'
+
+  # CloudWatch Log Group
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${LambdaFunctionName}-${Environment}'
+      RetentionInDays: 14
+
+  # API Key for webhook authentication
+  WebhookApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Condition: EnableApiKeyAuth
+    Properties:
+      Name: !Sub '${ApiGatewayName}-api-key-${Environment}'
+      Description: 'API Key for Meraki webhook endpoint'
+      Enabled: true
+      GenerateDistinctId: true
+
+  # Usage Plan for API Key
+  WebhookUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Condition: EnableApiKeyAuth
+    Properties:
+      UsagePlanName: !Sub '${ApiGatewayName}-usage-plan-${Environment}'
+      Description: 'Usage plan for Meraki webhook API'
+      Throttle:
+        RateLimit: 100    # requests per second
+        BurstLimit: 200   # burst capacity
+      Quota:
+        Limit: 10000      # requests per day
+        Period: DAY
+      ApiStages:
+        - ApiId: !Ref MerakiWebhookApi
+          Stage: !Ref ApiStage
+
+  # Link API Key to Usage Plan
+  WebhookUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Condition: EnableApiKeyAuth
+    DependsOn: 
+      - WebhookApiKey
+      - WebhookUsagePlan
+    Properties:
+      KeyId: !Ref WebhookApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref WebhookUsagePlan
+
+  # API Gateway REST API
+  MerakiWebhookApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${ApiGatewayName}-${Environment}'
+      Description: 'API Gateway for Meraki webhook processing'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Policy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: '*'
+
+  # API Gateway Resource (webhook endpoint)
+  WebhookResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MerakiWebhookApi
+      ParentId: !GetAtt MerakiWebhookApi.RootResourceId
+      PathPart: webhook
+
+  # API Gateway Method (POST)
+  WebhookPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MerakiWebhookApi
+      ResourceId: !Ref WebhookResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: !If [EnableApiKeyAuth, true, false]
+      RequestValidatorId: !Ref RequestValidator
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MerakiWebhookLambda.Arn}/invocations'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  # API Gateway Method (OPTIONS for CORS)
+  WebhookOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MerakiWebhookApi
+      ResourceId: !Ref WebhookResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  # Request Validator
+  RequestValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      RestApiId: !Ref MerakiWebhookApi
+      Name: 'webhook-request-validator'
+      ValidateRequestBody: true
+      ValidateRequestParameters: false
+
+  # API Gateway Deployment
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - WebhookPostMethod
+      - WebhookOptionsMethod
+    Properties:
+      RestApiId: !Ref MerakiWebhookApi
+      Description: !Sub 'Deployment for ${Environment} environment'
+
+  # API Gateway Stage
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref MerakiWebhookApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: !Ref Environment
+      Description: !Sub 'Stage for ${Environment} environment'
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          MetricsEnabled: true
+          ThrottlingRateLimit: 100
+          ThrottlingBurstLimit: 200
+      Variables:
+        environment: !Ref Environment
+
+  # Lambda Permission for API Gateway
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MerakiWebhookLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MerakiWebhookApi}/*/*'
+
+  # CloudWatch Alarms
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${LambdaFunctionName}-${Environment}-errors'
+      AlarmDescription: 'Lambda function error rate alarm'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MerakiWebhookLambda
+      TreatMissingData: notBreaching
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${LambdaFunctionName}-${Environment}-duration'
+      AlarmDescription: 'Lambda function duration alarm'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MerakiWebhookLambda
+      TreatMissingData: notBreaching
+
+  # API Gateway Alarms
+  ApiGateway4xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ApiGatewayName}-${Environment}-4xx-errors'
+      AlarmDescription: 'API Gateway 4xx error rate alarm'
+      MetricName: 4XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub '${ApiGatewayName}-${Environment}'
+        - Name: Stage
+          Value: !Ref Environment
+      TreatMissingData: notBreaching
+
+  ApiGateway5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ApiGatewayName}-${Environment}-5xx-errors'
+      AlarmDescription: 'API Gateway 5xx error rate alarm'
+      MetricName: 5XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub '${ApiGatewayName}-${Environment}'
+        - Name: Stage
+          Value: !Ref Environment
+      TreatMissingData: notBreaching
+
+Outputs:
+  WebhookApiUrl:
+    Description: 'URL of the webhook API endpoint'
+    Value: !Sub 'https://${MerakiWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/webhook'
+    Export:
+      Name: !Sub '${AWS::StackName}-WebhookApiUrl'
+
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt MerakiWebhookLambda.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionArn'
+
+  LambdaFunctionName:
+    Description: 'Name of the Lambda function'
+    Value: !Ref MerakiWebhookLambda
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionName'
+
+  ApiGatewayId:
+    Description: 'ID of the API Gateway'
+    Value: !Ref MerakiWebhookApi
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayId'
+
+  ApiGatewayUrl:
+    Description: 'Base URL of the API Gateway'
+    Value: !Sub 'https://${MerakiWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayUrl'
+
+  CloudWatchLogGroup:
+    Description: 'CloudWatch Log Group name for the Lambda function'
+    Value: !Ref LambdaLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroup'
+
+  BedrockModelId:
+    Description: 'Bedrock model ID being used'
+    Value: !If 
+      - UseCustomModelId
+      - !Ref BedrockModelId
+      - !FindInMap [BedrockModels, !Ref 'AWS::Region', Primary]
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockModelId'
+
+  SupportedModels:
+    Description: 'All supported models for this region'
+    Value: !Sub 
+      - 'Primary: ${Primary}, Secondary: ${Secondary}, Fallback: ${Fallback}'
+      - Primary: !FindInMap [BedrockModels, !Ref 'AWS::Region', Primary]
+        Secondary: !FindInMap [BedrockModels, !Ref 'AWS::Region', Secondary]
+        Fallback: !FindInMap [BedrockModels, !Ref 'AWS::Region', Fallback]
+    Export:
+      Name: !Sub '${AWS::StackName}-SupportedModels'
+
+  WebhookApiKeyId:
+    Condition: EnableApiKeyAuth
+    Description: 'API Key ID for webhook authentication'
+    Value: !Ref WebhookApiKey
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiKeyId'
+
+  ApiKeyRetrievalCommand:
+    Condition: EnableApiKeyAuth
+    Description: 'Command to retrieve API key value'
+    Value: !Sub 'aws apigateway get-api-key --api-key ${WebhookApiKey} --include-value --region ${AWS::Region} --query "value" --output text'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiKeyCommand'
+
+  WebhookUsageExample:
+    Description: 'Example curl command for webhook usage'
+    Value: !If 
+      - EnableApiKeyAuth
+      - !Sub 'curl -X POST -H "x-api-key: YOUR_API_KEY" -H "Content-Type: application/json" -d "{\"alertType\":\"test\"}" https://${MerakiWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/webhook'
+      - !Sub 'curl -X POST -H "Content-Type: application/json" -d "{\"alertType\":\"test\"}" https://${MerakiWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/webhook'
+    Export:
+      Name: !Sub '${AWS::StackName}-WebhookUsage'

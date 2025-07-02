@@ -1,0 +1,60 @@
+# AWS and deployment artifacts
+*.zip
+lambda-deployment.zip
+deployment-package/
+response.json
+
+# Configuration files with sensitive data
+.deployment-config
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE and system files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# AWS credentials (should never be committed)
+aws-credentials
+.aws/
+
+# CloudFormation outputs
+cfn-outputs.json
+stack-outputs.json
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Node.js (if any future extensions)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
