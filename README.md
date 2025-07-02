@@ -1,5 +1,14 @@
 # Meraki Webhook Alert Processor
 
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
+[![AWS Lambda](https://img.shields.io/badge/AWS-Lambda-orange.svg?logo=amazon-aws)](https://aws.amazon.com/lambda/)
+[![Amazon Bedrock](https://img.shields.io/badge/Amazon-Bedrock-FF9900.svg?logo=amazon-aws)](https://aws.amazon.com/bedrock/)
+[![Claude 4](https://img.shields.io/badge/Claude-4%2F3.5-purple.svg)](https://www.anthropic.com/)
+[![CloudFormation](https://img.shields.io/badge/CloudFormation-IaC-green.svg?logo=amazon-aws)](https://aws.amazon.com/cloudformation/)
+[![API Gateway](https://img.shields.io/badge/API-Gateway-blue.svg?logo=amazon-aws)](https://aws.amazon.com/api-gateway/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-black.svg?logo=github)](https://github.com/coozgan/meraki-webhook-alert-processor)
+
 This project implements an AWS Lambda function that processes Cisco Meraki webhook alerts using Amazon Bedrock (Claude 4/3.5 Sonnet) for intelligent analysis and sends notifications via Google Chat and email.
 
 ## Architecture
