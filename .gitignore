@@ -5,7 +5,7 @@ deployment-package/
 response.json
 
 # Configuration files with sensitive data
-.deployment-config
+.deployment-config*
 .env
 *.env
 
