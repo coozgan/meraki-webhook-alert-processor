@@ -365,10 +365,6 @@ Features:
 - Comprehensive deployment summary
 - Error handling and rollback
 
-## Testing
-
-## Testing
-
 ### Test the Webhook Endpoint
 
 ```bash
